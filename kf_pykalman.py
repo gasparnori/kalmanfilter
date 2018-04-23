@@ -43,6 +43,10 @@ class Window(QWidget):
         self.predicted_state = []
         self.updated_state = []
 
+        #mask: adding missing values
+        self.mask_list=np.sort(random.sample(range(1, 2000), 20))
+        self.active_mask=0
+
         deltaT=0.5
         #Fk: transition matrix
         self.Fk =np.array( [[1, 0, deltaT, 0],[0, 1, 0, deltaT], [0, 0, 1, 0], [0, 0, 0, 1]])
@@ -61,20 +65,19 @@ class Window(QWidget):
         self.kf = KalmanFilter(transition_matrices=self.Fk,
                                observation_matrices=self.Hk,
                                transition_covariance=self.Pk,
-                               observation_covariance=self.Rk)
+                               observation_covariance=self.Rk,
+                               random_state=0)
 
-        self.kf2=KalmanFilter(transition_matrices=self.Fk,
-                               observation_matrices=self.Hk)
+        #self.kf2=KalmanFilter(transition_matrices=self.Fk,
+        #                       observation_matrices=self.Hk)
 
     def smoothing(self):
         self.predictbtn.setChecked(False)
         self.smooth_trajectories()
 
-
     def onlinepred(self, state):
         if state:
             print "online predicton"
-
 
     def initUI(self):
         self.setGeometry(300, 300, 600, 600)
@@ -91,6 +94,7 @@ class Window(QWidget):
         self.predictbtn.setCheckable(True)
         self.setWindowTitle('Points')
         self.show()
+
     def valuechange(self):
         s='Current Observation coefficient value: '+str(self.ObservationCoeffVal.value())
         self.ObservationCoeff.setText(s)
@@ -112,6 +116,10 @@ class Window(QWidget):
         if len(self.updated_state)>2:
             [qp.drawLine(self.updated_state[i][0], self.updated_state[i][1], self.updated_state[i - 1][0],
                          self.updated_state[i - 1][1]) for i in range(1, len(self.updated_state) - 1)]
+
+            qp.setBrush(Qt.green)
+            if self.active_mask>0:
+                [qp.drawEllipse(self.updated_state[m][0], self.updated_state[m][1], 15, 15) for m in self.mask_list[0:self.active_mask-1]]
         qp.end()
 
     def addPoints(self, x,y):
@@ -122,16 +130,29 @@ class Window(QWidget):
         # print t
         self.timer.restart()
         if t>0:
-            vx= (datax-self.points_measured[-1][0])/t
-            vy= (datay-self.points_measured[-1][1])/t
+            vx= (datax-self.updated_state[-1][0])/t
+            vy= (datay-self.updated_state[-1][1])/t
         else:
             vx=1
             vy=1
-        self.measured_state.append([datax, datay, vx, vy])
-        self.points_measured.append([datax, datay])
 
-        if self.predictbtn.isChecked() and len(self.measured_state)>5:
-            self.trajectories_online(t)
+        #an index to be masked
+        if len(self.measured_state)!=self.mask_list[self.active_mask]:
+            self.measured_state.append([datax, datay, vx, vy])
+            self.points_measured.append([datax, datay])
+            if self.predictbtn.isChecked() and len(self.measured_state) > 5:
+                self.trajectories_online(t)
+                #self.estimated_trajectory()
+
+
+        else:
+            if self.predictbtn.isChecked() and len(self.measured_state) > 5:
+                print self.mask_list[self.active_mask]
+                self.measured_state.append(self.measured_state[-1])
+                self.trajectories_online(t)
+                #self.estimated_trajectory()
+                self.active_mask=self.active_mask+1
+
 
 
     def mousePressEvent(self, mouse_event):
@@ -170,13 +191,32 @@ class Window(QWidget):
     def trajectories_online(self, dt):
         if len(self.measured_state)==5:
             measurements = np.asarray(self.measured_state)
-            self.kf2 = self.kf2.em(measurements, n_iter=5)
+            #self.kf2 = self.kf2.em(measurements, n_iter=5)
         self.kf.observation_covariance=np.eye(4,4)*self.ObservationCoeffVal.value()
         #self.kf.transition_matrices=np.array( [[1, 0, dt, 0],[0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])
         online_means, self.Pk = self.kf.filter_update(self.updated_state[-1], self.Pk, self.measured_state[-1])
         self.updated_state.append(online_means)
-        online_means, self.Pk2 = self.kf2.filter_update(self.predicted_state[-1], self.Pk2, self.measured_state[-1])
-        self.predicted_state.append(online_means)
+       # online_means, self.Pk2 = self.kf2.filter_update(self.predicted_state[-1], self.Pk2, self.measured_state[-1])
+       # self.predicted_state.append(online_means)
+        self.update()
+
+    #if the next measurement is missing
+    def estimated_trajectory(self):
+        print "estimating"
+       # self.measured_state.append(self.measured_state[-1])
+        if len(self.measured_state)>40:
+            measurements=self.updated_state[-40:-2]
+            measurements.append(self.measured_state[-1])
+            measurements = np.asarray(measurements)
+        else:
+            measurements = self.updated_state[:]
+            measurements.append(self.measured_state[-1])
+            measurements = np.asarray(measurements)
+        (smoothed_state_means, smoothed_state_covariances) = self.kf.smooth(measurements)
+        #print "measurements, smoothed states: ", self.measured_state[-1],\
+        #    int(smoothed_state_means[-1][0]),\
+        #    int(smoothed_state_means[-1][1])
+        self.updated_state.append(smoothed_state_means[-1])
         self.update()
 
 def main():
