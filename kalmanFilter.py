@@ -4,7 +4,7 @@ import numpy as np
 import sys, random
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
-from pykalman import KalmanFilter
+#from pykalman import KalmanFilter
 import math
 
 class Window(QWidget):
@@ -46,9 +46,9 @@ class Window(QWidget):
         self.Pk=np.eye(4, 4)
         #Rk: observation covariance
         #self.measurement_covariance = np.eye(4, 4)
-        self.R = 5  # estimate of measurement variance, change to see effect
+        self.Rk =np.eye(4, 4)* 5  # estimate of measurement variance, change to see effect
         # Q
-        self.Q = 0.1  # process variance
+       # self.Q = 0.1  # process variance
         self.kf = None
 
         self.onlinefilter_means = []
@@ -80,10 +80,10 @@ class Window(QWidget):
         if len(self.points_measured)>0:
             [qp.drawEllipse(self.points_measured[i][0], self.points_measured[i][1], 5, 5)
                 for i in range(0, len(self.points_measured))]
-        qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
-        if len(self.predicted_state)>1:
-            [qp.drawLine(self.predicted_state[i][0], self.predicted_state[i][1], self.predicted_state[i-1][0],
-                         self.predicted_state[i-1][1]) for i in range(1, len(self.predicted_state)-1)]
+        # qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
+        # if len(self.predicted_state)>1:
+        #     [qp.drawLine(self.predicted_state[i][0], self.predicted_state[i][1], self.predicted_state[i-1][0],
+        #                  self.predicted_state[i-1][1]) for i in range(1, len(self.predicted_state)-1)]
 
         qp.setPen(QPen(Qt.blue, 2, Qt.SolidLine))
 
@@ -130,16 +130,16 @@ class Window(QWidget):
     #the filter itself
     def iterate_filter(self, dt):
         #print dt
-        #self.Fk = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])
+        self.Fk = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])
         pred =np.matmul(self.Fk, self.updated_state[-1])
-        cov = np.matmul(np.matmul(self.Fk, self.Pk), self.Fk.transpose()) + self.Q
-        Rk=np.eye(4,4)*self.R
+        cov = np.matmul(np.matmul(self.Fk, self.Pk), self.Fk.transpose())
+        #Rk=np.eye(4,4)*self.R
 
         #Kgain=np.matmul(np.matmul(self.Pk, self.Hk.transpose()), temp2)
-        Kgain = np.matmul(self.Pk, np.linalg.inv(self.Pk+self.R))
+        Kgain = np.matmul(cov, np.linalg.inv(cov+self.Rk))
         print "Kgain", Kgain
         updateval=pred+np.matmul(Kgain, (self.measured_state[-1]-pred))
-        self.Pk=cov+np.matmul(Kgain, self.Pk)
+        self.Pk=cov-np.matmul(Kgain, cov)
 
         self.updated_state.append(updateval)
         self.predicted_state.append(pred)
