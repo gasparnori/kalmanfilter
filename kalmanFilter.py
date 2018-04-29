@@ -9,17 +9,20 @@ import math
 num_variables=6
 forget= 0.3 #forgetting factor
 
+
 class Window(QWidget):
 
     def __init__(self):
         super(Window, self).__init__()
         #self.layout = QVBoxLayout(self)
         self.layout =  QGridLayout(self)
-        self.smoothbtn = QPushButton('Smooth trajectory', self)
-        self.predictbtn= QPushButton('Online prediction', self)
+        #self.smoothbtn = QPushButton('Smooth trajectory', self)
+        self.adaptbtn=QCheckBox('Adaptive Filtering', self)
+        self.predictbtn= QPushButton('Start prediction', self)
         self.drawing= QWidget(self)
 
-        self.layout.addWidget(self.smoothbtn, 0, 0)
+        #self.layout.addWidget(self.smoothbtn, 0, 0)
+        self.layout.addWidget(self.adaptbtn, 0, 0)
         self.layout.addWidget(self.predictbtn, 0, 1)
         self.layout.addWidget(self.drawing, 1, 1)
         self.resetFilter()
@@ -35,42 +38,44 @@ class Window(QWidget):
         self.points_measured = []
 
         #for the filter
-        self.measured_state = []
-        self.predicted_state = []
-        self.updated_state = []
+        self.measured_state = np.zeros(shape=(num_variables, 1))
+       # self.predicted_state = []
+        #a FIFO
+        self.updated_state = np.zeros(shape=(num_variables, 100))
 
         deltaT=0.5
         #Fk: transition matrix for only position and velocity
         #self.Fk =np.array( [[1, 0, deltaT, 0],[0, 1, 0, deltaT], [0, 0, 1, 0], [0, 0, 0, 1]])
 
         #Fk: transition matrix for acceleration, velocity and position
-        self.Fk = np.array([[1, 0, deltaT, 0, 0.5*deltaT*deltaT, 0],
-                            [0, 1, 0, deltaT, 0, 0.5*deltaT*deltaT],
-                            [0, 0, 1, 0, deltaT, 0],
-                            [0, 0, 0, 1, 0, deltaT],
-                            [0, 0, 0, 0, 1,0],
-                            [0, 0, 0, 0, 0, 1]])
+        self.Fk = np.matrix(((1, 0, deltaT, 0, 0.5*deltaT*deltaT, 0),
+                            (0, 1, 0, deltaT, 0, 0.5*deltaT*deltaT),
+                            (0, 0, 1, 0, deltaT, 0),
+                            (0, 0, 0, 1, 0, deltaT),
+                            (0, 0, 0, 0, 1,0),
+                            (0, 0, 0, 0, 0, 1)))
         #Hk:observation matrix
         self.Hk =np.eye(num_variables, num_variables) #not going to change
         #Pk: transition covariance
-        self.Pk=np.zeros((num_variables, num_variables))#np.eye(num_variables, num_variables)
+        self.Pk=np.zeros(shape=(num_variables, num_variables))#np.eye(num_variables, num_variables)
         #Rk: observation covariance
         #self.measurement_covariance = np.eye(4, 4)
         self.Rk =np.eye(num_variables, num_variables)* 10  # estimate of measurement variance, change to see effect
         # Q
-        self.Q = [[0.2, 0, 0, 0, 0, 0],
-                    [0, 0.2, 0, 0, 0, 0],
-                    [0, 0, 0.0005, 0, 0, 0],
-                    [0, 0, 0, 0.0005, 0, 0],
+        self.Qk = np.matrix([[0.5, 0, 0, 0, 0, 0],
+                    [0, 0.5, 0, 0, 0, 0],
                     [0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0]]
+                    [0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0]])
+        self.Kgain=np.eye(num_variables, num_variables)
         self.kf = None
 
         self.onlinefilter_means = []
         self.onlinefilter_covariance = []
-    def smoothing(self):
+ #   def smoothing(self):
 
-        self.predictbtn.setChecked(False)
+ #       self.predictbtn.setChecked(False)
 
 
     def onlinepred(self, state):
@@ -82,7 +87,7 @@ class Window(QWidget):
         self.setGeometry(300, 300, 600, 600)
 
         self.layout.setAlignment(Qt.AlignTop)
-        self.smoothbtn.clicked.connect(self.smoothing)
+        #self.smoothbtn.clicked.connect(self.smoothing)
         self.predictbtn.clicked.connect(self.onlinepred)
         self.predictbtn.setCheckable(True)
         self.setWindowTitle('Points')
@@ -90,11 +95,17 @@ class Window(QWidget):
 
     def paintEvent(self, e):
         #print "e", e
+        numPoints=self.updated_state.shape[1]
         qp = QPainter(self)
         qp.setBrush(Qt.red)
         if len(self.points_measured)>0:
-            [qp.drawEllipse(self.points_measured[i][0], self.points_measured[i][1], 5, 5)
-                for i in range(0, len(self.points_measured))]
+            if len(self.points_measured)>numPoints:
+                [qp.drawEllipse(self.points_measured[i][0], self.points_measured[i][1], 5, 5)
+                    for i in range(len(self.points_measured)-numPoints, len(self.points_measured))]
+            else:
+                [qp.drawEllipse(self.points_measured[i][0], self.points_measured[i][1], 5, 5)
+                 for i in range(0, len(self.points_measured))]
+
         # qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
         # if len(self.predicted_state)>1:
         #     [qp.drawLine(self.predicted_state[i][0], self.predicted_state[i][1], self.predicted_state[i-1][0],
@@ -105,10 +116,11 @@ class Window(QWidget):
         #print self.updated_state.shape
         #print len(self.updated_state)
 
-        if len(self.updated_state)>2:
-
-            [qp.drawLine(int(self.updated_state[i][0]), int(self.updated_state[i][1]), int(self.updated_state[i - 1][0]),
-                         int(self.updated_state[i - 1][1])) for i in range(1, len(self.updated_state) - 1)]
+       # if self.updated_state)>2:
+        startpoint=1 if len(self.points_measured)>numPoints else (numPoints-len(self.points_measured)+1)
+        #print startpoint
+        [qp.drawLine(int(self.updated_state[0,i]), int(self.updated_state[1,i]), int(self.updated_state[0,(i - 1)]),
+                int(self.updated_state[1,(i - 1)])) for i in range(startpoint, (numPoints - 1))]
         qp.end()
 
     def addPoints(self, x,y):
@@ -121,19 +133,29 @@ class Window(QWidget):
         if t>0:
             vx= (datax-self.points_measured[-1][0])/t
             vy= (datay-self.points_measured[-1][1])/t
-            ax= (vx-self.measured_state[2])/t
-            ay= (vy-self.measured_state[3])/t
+            ax= (vx-self.measured_state[2,0])/t
+            ay= (vy-self.measured_state[3,0])/t
         else:
-            vx= (self.measured_state[2])
-            vy= (self.measured_state[3])
-            ax= (self.measured_state[4])
-            ay= (self.measured_state[5])
+            vx= (self.measured_state[2,0])
+            vy= (self.measured_state[3,0])
+            ax= (self.measured_state[4,0])
+            ay= (self.measured_state[5,0])
 
-        self.measured_state=[datax, datay, vx, vy, ax, ay]
+        self.measured_state=np.array([[datax], [datay], [vx], [vy], [ax], [ay]])
         self.points_measured.append([datax, datay])
 
         if self.predictbtn.isChecked():
-            self.iterate_filter(t)
+            #important to change it to the matrix form required
+
+            p=self.iterate_filter(t,
+                                  np.asmatrix(self.updated_state[:, -1]).transpose(),
+                                  np.asmatrix(self.measured_state),
+                                  self.adaptbtn.isChecked())
+            self.updated_state[:, :-1]=self.updated_state[:, 1:]
+
+            self.updated_state[:, -1]=p.A1
+
+           # print "blabla"
 
 
     def mousePressEvent(self, mouse_event):
@@ -141,11 +163,12 @@ class Window(QWidget):
         self.resetFilter()
 
         self.timer.start()
-        self.initial_state=[mouse_event.x(), mouse_event.y(), 0, 0, 0, 0]
+        initial_state=np.array([[mouse_event.x()], [mouse_event.y()], [0], [0], [0], [0]])
         self.points_measured.append([mouse_event.x(), mouse_event.y()])
-        self.measured_state=self.initial_state
-        self.updated_state.append(self.initial_state)
-        self.predicted_state.append(self.initial_state)
+        self.measured_state[:, 0] = initial_state[:, 0]
+        #print self.measured_state
+        self.updated_state[:, -1]=initial_state[:,0]
+       # self.predicted_state.append(self.initial_state)
 
 
     def mouseMoveEvent(self, mouse_event):
@@ -155,80 +178,50 @@ class Window(QWidget):
         self.update()
 
     #the filter itself
-    def iterate_filter(self, dt):
+    def iterate_filter(self, dt, u, m, adaptive=False):
         # print dt
-       #dt=0.5
-        #if len(self.points_measured)>100:
-            #print np.cov(self.points_measured[-101:-1])
+
+
+       # m = np.asmatrix(m_state)
+       # u = np.asmatrix(u_state).transpose()
         HkT=self.Hk.transpose()
+
         self.Fk = np.array([[1, 0, dt, 0, 0.5*dt*dt, 0],
                             [0, 1, 0, dt, 0, 0.5*dt*dt],
                             [0, 0, 1, 0, dt, 0],
                             [0, 0, 0, 1, 0,dt],
                             [0, 0, 0, 0, 1, 0],
                             [0, 0, 0, 0, 0, 1]])
-        # self.Fk = np.array([[1, 0, dt, 0, 0, 0],
-        #                      [0, 1, 0, dt, 0, 0],
-        #                      [0, 0, 1, 0, dt, 0],
-        #                      [0, 0, 0, 1, 0,dt],
-        #                      [0, 0, 0, 0, 1, 0],
-        #                      [0, 0, 0, 0, 0, 1]])
-        pred = np.matmul(self.Fk, self.updated_state[-1])
-        cov = np.matmul(np.matmul(self.Fk, self.Pk),self.Fk.transpose())+self.Q
 
-        residual = self.measured_state - np.matmul(self.Hk, pred)
-        #print residual
-        S=np.matmul(residual, residual.transpose())
-        #self.Rk = forget*self.Rk + (1-forget)*(S + np.matmul(np.matmul(self.Hk, cov), HkT))
+        # #prediction step
+        pred = self.Fk*u
+        cov = self.Fk*self.Pk*self.Fk.transpose()+self.Qk
 
-        temp=np.matmul(np.matmul(self.Hk,cov),HkT) + self.Rk
-        Kgain =np.matmul(np.matmul(cov, HkT), np.linalg.inv(temp))
-        # print "Kgain", Kgain
+        #before update
+        diff = m - self.Hk * pred
+        self.Kgain = cov * HkT * np.linalg.inv(self.Hk * cov * HkT + self.Rk)
+        # #adapting Rk and Qk
 
-        updateval = pred + np.matmul(Kgain, residual)
+        #update
+        updateval = pred + self.Kgain * diff
+        residual=m-(self.Hk*updateval)
 
-        self.Pk = np.matmul(np.eye(num_variables, num_variables) - np.matmul(Kgain, self.Hk), cov)
+        if adaptive:
+            self.Rk = forget * self.Rk + (1 - forget) * (residual * residual.transpose() + self.Hk * cov * HkT)
+            self.Kgain = cov * HkT * np.linalg.inv(self.Hk * cov * HkT + self.Rk)
+            self.Qk = forget * self.Qk + (1 - forget) * self.Kgain * diff * diff.transpose() * self.Kgain.transpose()
 
-        self.updated_state.append(updateval)
-        self.predicted_state.append(pred)
+        self.Pk = (np.eye(num_variables, num_variables) - (self.Kgain * self.Hk)) * cov
 
-        # print "measured: ", self.measured_state[-1][0], self.measured_state[-1][1]
-        # print "pred: ", self.predicted_state[-1][0], self.predicted_state[-1][1]
-        # print "updated",  self.updated_state[-1][0],  self.updated_state[-1][1]
 
-        # print "covariance: ", cov
-
-    # def iterate_filter2(self, dt):
-    #     #print dt
-    #
-    #     self.Fk = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])
-    #     pred =np.matmul(self.Fk, self.updated_state[-1])
-    #     cov = self.Fk*self.Pk*self.Fk.transpose()
-    #     #Rk=np.eye(4,4)*self.R
-    #
-    #     #Kgain=np.matmul(np.matmul(self.Pk, self.Hk.transpose()), temp2)
-    #     Kgain = cov*self.Hk.transpose()*np.linalg.inv(self.Hk*cov*self.Hk.transpose()+self.Rk)
-    #     #print "Kgain", Kgain
-    #     updateval=pred+np.matmul(Kgain, self.measured_state[-1])-np.matmul(self.Hk, pred)
-    #     self.Pk= cov - np.matmul(np.matmul(Kgain, self.Hk), cov)
-    #
-    #     self.updated_state.append(updateval)
-    #     self.predicted_state.append(pred)
-    #
-    #     #print "measured: ", self.measured_state[-1][0], self.measured_state[-1][1]
-    #     #print "pred: ", self.predicted_state[-1][0], self.predicted_state[-1][1]
-    #     #print "updated",  self.updated_state[-1][0],  self.updated_state[-1][1]
-    #
-    #
-    #     #print "covariance: ", cov
-
+        return updateval
+        #self.predicted_state.append(pred)
 
     def mouseReleaseEvent(self, mouse_event):
         print "stop"
         print "smooth line"
         #self.predict_all_trajectories()
         #print self.points
-
 
 
 def main():
