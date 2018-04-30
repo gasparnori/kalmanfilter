@@ -4,10 +4,9 @@ import numpy as np
 import sys, random
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
-#from pykalman import KalmanFilter
 import math
 num_variables=6
-forget= 0.3 #forgetting factor
+forget= 0.6 #forgetting factor
 
 
 class Window(QWidget):
@@ -17,14 +16,18 @@ class Window(QWidget):
         #self.layout = QVBoxLayout(self)
         self.layout =  QGridLayout(self)
         #self.smoothbtn = QPushButton('Smooth trajectory', self)
-        self.adaptbtn=QCheckBox('Adaptive Filtering', self)
-        self.predictbtn= QPushButton('Start prediction', self)
+        self.adaptbtn=QRadioButton('Adaptive Filtering', self)
+        self.rollingbtn=QRadioButton('Rolling Covariance', self)
+        self.fixedbtn=QRadioButton('Fixed parameters', self)
+        self.predictbtn= QPushButton('Reset', self)
         self.drawing= QWidget(self)
 
         #self.layout.addWidget(self.smoothbtn, 0, 0)
         self.layout.addWidget(self.adaptbtn, 0, 0)
-        self.layout.addWidget(self.predictbtn, 0, 1)
-        self.layout.addWidget(self.drawing, 1, 1)
+        self.layout.addWidget(self.rollingbtn, 1, 0)
+        self.layout.addWidget(self.predictbtn, 1, 1)
+        self.layout.addWidget(self.fixedbtn, 2, 0)
+        self.layout.addWidget(self.drawing, 2, 1)
         self.resetFilter()
 
 
@@ -78,9 +81,11 @@ class Window(QWidget):
  #       self.predictbtn.setChecked(False)
 
 
-    def onlinepred(self, state):
-        if state:
-            print "online predicton"
+    def resetGUI(self, state):
+        print "restart"
+        self.resetFilter()
+        self.timer.start()
+        self.update()
 
 
     def initUI(self):
@@ -88,8 +93,8 @@ class Window(QWidget):
 
         self.layout.setAlignment(Qt.AlignTop)
         #self.smoothbtn.clicked.connect(self.smoothing)
-        self.predictbtn.clicked.connect(self.onlinepred)
-        self.predictbtn.setCheckable(True)
+        self.predictbtn.clicked.connect(self.resetGUI)
+        #self.predictbtn.setCheckable(True)
         self.setWindowTitle('Points')
         self.show()
 
@@ -144,16 +149,18 @@ class Window(QWidget):
         self.measured_state=np.array([[datax], [datay], [vx], [vy], [ax], [ay]])
         self.points_measured.append([datax, datay])
 
-        if self.predictbtn.isChecked():
+        #if self.predictbtn.isChecked():
             #important to change it to the matrix form required
 
-            p=self.iterate_filter(t,
-                                  np.asmatrix(self.updated_state[:, -1]).transpose(),
-                                  np.asmatrix(self.measured_state),
-                                  self.adaptbtn.isChecked())
-            self.updated_state[:, :-1]=self.updated_state[:, 1:]
+        p=self.iterate_filter(t,
+                              np.asmatrix(self.updated_state[:, -1]).transpose(),
+                              np.asmatrix(self.measured_state),
+                              self.adaptbtn.isChecked(),
+                              self.rollingbtn.isChecked(),
+                              self.fixedbtn.isChecked())
+        self.updated_state[:, :-1]=self.updated_state[:, 1:]
 
-            self.updated_state[:, -1]=p.A1
+        self.updated_state[:, -1]=p.A1
 
            # print "blabla"
 
@@ -178,7 +185,7 @@ class Window(QWidget):
         self.update()
 
     #the filter itself
-    def iterate_filter(self, dt, u, m, adaptive=False):
+    def iterate_filter(self, dt, u, m, adaptive=False, rolling=False, fixed=True):
         # print dt
 
 
@@ -201,17 +208,22 @@ class Window(QWidget):
         diff = m - self.Hk * pred
         self.Kgain = cov * HkT * np.linalg.inv(self.Hk * cov * HkT + self.Rk)
         # #adapting Rk and Qk
+        if adaptive:
+            self.Qk = forget * self.Qk + (1 - forget) * self.Kgain * diff * diff.transpose() * self.Kgain.transpose()
 
         #update
         updateval = pred + self.Kgain * diff
         residual=m-(self.Hk*updateval)
-
-        if adaptive:
-            self.Rk = forget * self.Rk + (1 - forget) * (residual * residual.transpose() + self.Hk * cov * HkT)
-            self.Kgain = cov * HkT * np.linalg.inv(self.Hk * cov * HkT + self.Rk)
-            self.Qk = forget * self.Qk + (1 - forget) * self.Kgain * diff * diff.transpose() * self.Kgain.transpose()
-
         self.Pk = (np.eye(num_variables, num_variables) - (self.Kgain * self.Hk)) * cov
+
+        #c=np.cov(residual)
+        if adaptive:
+            self.Rk = forget * self.Rk + (1 - forget) * (residual * residual.T + (self.Hk * self.Pk * HkT))
+
+        if rolling:
+            self.rollingCov=forget*self.rollingCov+(1-forget)*(residual*residual.T)
+            print self.rollingCov
+
 
 
         return updateval
