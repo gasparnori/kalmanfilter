@@ -8,6 +8,7 @@ from PyQt4.QtGui import *
 import math
 import random
 num_variables=6
+missing_num=5
 forget_R= 0.3 #forgetting factor
 forget_Q=0.3
 
@@ -44,8 +45,10 @@ class Plotter():
 
         if color == 'red':
             mx, =plt.plot(self.times, self.measuredX, 'r', label='Measured')
-        else:
+        elif color=='green':
             mx, = plt.plot(self.times, self.measuredX, 'g', label='Measured')
+        else:
+            mx, = plt.plot(self.times, self.measuredX, 'y', label='Measured')
         plt.legend(handles=[ux, mx])
         #plt.setp(p1.get_xticklabels(), visible=False)
         p2= fig1.add_subplot(212, sharex=p1)  # creates 2nd subplot with yellow background
@@ -56,8 +59,10 @@ class Plotter():
 
         if color == 'red':
             my, =plt.plot(self.times, self.measuredY, 'r',  label='Measured')
-        else:
+        elif color == 'green':
             my, = plt.plot(self.times, self.measuredY, 'g', label='Measured')
+        else:
+            my, = plt.plot(self.times, self.measuredY, 'y', label='Measured')
         plt.legend(handles=[uy, my])
         plt.show()
 
@@ -93,15 +98,15 @@ class Filter():
         self.Rk = np.eye(num_variables, num_variables) * 20  # estimate of measurement variance, change to see effect
         # Q
         if num_variables == 4:
-            self.Qk = np.matrix([[0.7, 0, 0, 0],
-                                 [0, 0.7, 0, 0],
+            self.Qk = np.matrix([[0.3, 0, 0, 0],
+                                 [0, 0.3, 0, 0],
                                  [0, 0, 0.001, 0],
                                  [0, 0, 0, 0.001]])
         if num_variables == 6:
             self.Qk = np.matrix([[0.7, 0, 0, 0, 0, 0],
                                  [0, 0.7, 0, 0, 0, 0],
-                                 [0, 0, 0.001, 0, 0, 0],
-                                 [0, 0, 0, 0.001, 0, 0],
+                                 [0, 0, 0.01, 0, 0, 0],
+                                 [0, 0, 0, 0.01, 0, 0],
                                  [0, 0, 0, 0, 0.0, 0],
                                  [0, 0, 0, 0, 0, 0.0]])
 
@@ -157,7 +162,7 @@ class Filter():
                 self.Pk = (np.eye(num_variables, num_variables) - (self.Kgain * self.Hk)) * cov
 
             #self.plotter.add_updated([m[0,0], m[1,0]], [updateval[0,0], updateval[1,0]], dt)
-        print updateval
+        #print updateval
         return updateval
 
 class Feature():
@@ -165,10 +170,9 @@ class Feature():
         self.color=color
         self.offset=offset
         self.plotter = Plotter()
-        self.init()
+        self.reset()
 
-    def init(self):
-        self.timer = QElapsedTimer()
+    def reset(self):
         #to draw
         self.points_final = []
         self.points_online = []
@@ -179,12 +183,8 @@ class Feature():
         self.updated_state = np.zeros(shape=(num_variables, 100))
         self.kf=Filter()
 
-
-    def addPoints(self, x,y, adapt, predict):
+    def addPoints(self, x,y, t, adapt, predict):
         mu, sigma = 0, 10  # mean and standard deviation
-        t = self.timer.elapsed()
-        # print t
-        self.timer.restart()
 
         if x is None:
             p = self.kf.iterate_filter(t,
@@ -238,6 +238,73 @@ class Feature():
             #self.plotter.add_updated([0, 0], [updateval[0, 0], updateval[1, 0]], dt)
             return ([self.measured_state[0,0], self.measured_state[1,0]], [p[0,0], p[1,0]], t)
 
+class Object():
+    def __init__(self, red, green):
+        self.red=red
+        self.green=green
+        self.plotter=Plotter()
+        self.reset()
+
+    def reset(self):
+        #to draw
+        self.points_final = []
+        self.points_online = []
+        self.points_measured = []
+        # for the filter
+        self.measured_state = np.zeros(shape=(num_variables, 1))
+        # a FIFO
+        self.updated_state = np.zeros(shape=(num_variables, 100))
+        self.kf=Filter()
+
+    def add_points(self, red, green, t, adapt, predict):
+        # if at least one of the the data is missing
+        if (red[0]==0 and red [1]==0) or (green[0]==0 and green[1]==0):
+            p = self.kf.iterate_filter(t,
+                                    np.asmatrix(self.updated_state[:, -1]).transpose(),
+                                    None,
+                                    adapt,
+                                    predict)
+
+            self.updated_state[:, :-1]=self.updated_state[:, 1:]
+            self.updated_state[:, -1]=p.A1
+            self.measured_state = self.updated_state[:, -1]
+            self.measured_state.shape = (num_variables, 1)
+            return ([0,0], [p[0, 0], p[1, 0]], t)
+        else:
+            datax=(red[0]+green[0])/2.0
+            datay=(red[1]+green[1])/2.0
+            if t > 0:
+                vx = (datax - self.measured_state[0, 0]) / t  # px/usec
+                vy = (datay - self.measured_state[1, 0]) / t  # px/usec
+                if num_variables == 6:
+                    ax = (vx - self.measured_state[2, 0]) / t  # px/usec^2
+                    ay = (vy - self.measured_state[3, 0]) / t  # px/usec^2
+                    print "ax, ay calculation:", ax, ay
+            else:
+                vx = (self.measured_state[2, 0])
+                vy = (self.measured_state[3, 0])
+                if num_variables == 6:
+                    ax = (self.measured_state[4, 0])
+                    ay = (self.measured_state[5, 0])
+
+            if num_variables == 4:
+                self.measured_state = np.array([[datax], [datay], [vx], [vy]])
+            else:
+                self.measured_state = np.array([[datax], [datay], [vx], [vy], [ax], [ay]])
+                # print self.measured_state
+            self.points_measured.append([datax, datay])
+            p = self.kf.iterate_filter(t,
+                                       np.asmatrix(self.updated_state[:, -1]).transpose(),
+                                       np.asmatrix(self.measured_state),
+                                       adapt,
+                                       predict)
+
+            self.updated_state[:, :-1] = self.updated_state[:, 1:]
+            self.updated_state[:, -1] = p.A1
+            print self.updated_state[:, -1]
+            # self.plotter.add_updated([0, 0], [updateval[0, 0], updateval[1, 0]], dt)
+            return ([self.measured_state[0, 0], self.measured_state[1, 0]], [p[0, 0], p[1, 0]], t)
+
 
 
 class Window(QWidget):
@@ -245,9 +312,10 @@ class Window(QWidget):
     def __init__(self):
         # every 100 times, 5-10 coordinates are missing
         self.missing_counter=100
-
+        self.timer = QElapsedTimer()
         self.RLED=Feature('red', offset=5.0)
         self.GLED=Feature('red', offset=-5.0)
+        self.obj=Object(self.RLED, self.GLED)
 
         super(Window, self).__init__()
         #self.layout = QVBoxLayout(self)
@@ -271,7 +339,10 @@ class Window(QWidget):
 
     def resetGUI(self, state):
         print "restart"
-        self.resetFilter()
+        self.RLED.reset()
+        self.GLED.reset()
+        self.obj.reset()
+
         self.timer.start()
         self.update()
 
@@ -289,75 +360,75 @@ class Window(QWidget):
     def Plotting(self):
         self.RLED.plotter.plot(self.adaptbtn.isChecked(), 'red')
         self.GLED.plotter.plot(self.adaptbtn.isChecked(), 'green')
+        self.obj.plotter.plot(self.adaptbtn.isChecked(), 'yellow')
+
+    def plotMeasured(self, qp, m, u, color):
+        if color=='red':
+            qp.setBrush(Qt.red)
+        elif color=='green':
+            qp.setBrush(Qt.green)
+        else:
+            qp.setBrush(Qt.yellow)
+        numPoints = u.shape[1]
+        if len(m) > 0:
+            if len(m) > numPoints:
+                [qp.drawEllipse(m[i][0], m[i][1], 5, 5)
+                 for i in range(len(m) - numPoints, len(m))]
+            else:
+                [qp.drawEllipse(m[i][0], m[i][1], 5, 5)
+                 for i in range(0, len(m))]
+
+    def plotUpdated(self, qp, m, u, color):
+        numPoints=u.shape[1]
+        startpoint = 1 if (len(m) > numPoints) else (numPoints - len(m) + 1)
+        if color=='red':
+            qp.setPen(QPen(Qt.red, 2, Qt.SolidLine))
+        elif color=='green':
+            qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
+        else:
+            qp.setPen(QPen(Qt.yellow, 2, Qt.SolidLine))
+        [qp.drawLine(int(u[0, i]), int(u[1, i]), int(u[0, (i - 1)]),
+                     int(u[1, (i - 1)])) for i in range(startpoint, (numPoints - 1))]
 
     def paintEvent(self, e):
         #print "e", e
         qp = QPainter(self)
-        rm=self.RLED.points_measured
-        ru=self.RLED.updated_state
-        gm=self.GLED.points_measured
-        gu=self.GLED.updated_state
 
-        qp.setBrush(Qt.red)
-        if len(rm) > 0:
-            if len(rm) > ru.shape[1]:
-                [qp.drawEllipse(rm[i][0], rm[i][1], 5, 5)
-                 for i in range(len(rm) - ru.shape[1], len(rm))]
-            else:
-                [qp.drawEllipse(rm[i][0], rm[i][1], 5, 5)
-                 for i in range(0, len(rm))]
-        startpoint = 1 if len(rm) > ru.shape[1] else (ru.shape[1] - len(rm) + 1)
+        self.plotMeasured(qp, self.RLED.points_measured, self.RLED.updated_state, 'red')
+        self.plotMeasured(qp, self.GLED.points_measured, self.GLED.updated_state, 'green')
+        self.plotMeasured(qp, self.obj.points_measured, self.obj.updated_state, 'yellow')
 
-        qp.setPen(QPen(Qt.red, 2, Qt.SolidLine))
-        [qp.drawLine(int(ru[0, i]), int(ru[1, i]), int(ru[0, (i - 1)]),
-                     int(ru[1, (i - 1)])) for i in range(startpoint, (ru.shape[1] - 1))]
-        qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
-        qp.setBrush(Qt.green)
-        if len(gm) > 0:
-            if len(gm) > gu.shape[1]:
-                [qp.drawEllipse(gm[i][0], gm[i][1], 5, 5)
-                 for i in range(len(gm) - gu.shape[1], len(gm))]
-            else:
-                [qp.drawEllipse(gm[i][0], gm[i][1], 5, 5)
-                 for i in range(0, len(gm))]
-        gstartpoint = 1 if len(gm) > gu.shape[1] else (gu.shape[1] - len(gm) + 1)
+        self.plotUpdated(qp, self.RLED.points_measured, self.RLED.updated_state, 'red')
+        self.plotUpdated(qp, self.GLED.points_measured, self.GLED.updated_state, 'green')
+        self.plotUpdated(qp, self.obj.points_measured, self.obj.updated_state, 'yellow')
 
-        qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
-        [qp.drawLine(int(gu[0, i]), int(gu[1, i]), int(gu[0, (i - 1)]),
-                     int(gu[1, (i - 1)])) for i in range(gstartpoint, (gu.shape[1] - 1))]
         qp.end()
-
-        # qp.setPen(QPen(Qt.green, 2, Qt.SolidLine))
-        # if len(self.predicted_state)>1:
-        #     [qp.drawLine(self.predicted_state[i][0], self.predicted_state[i][1], self.predicted_state[i-1][0],
-        #                  self.predicted_state[i-1][1]) for i in range(1, len(self.predicted_state)-1)]
-
-        # print self.updated_state.shape
-        # print len(self.updated_state)
-
-        # if self.updated_state)>2:
-
-        # print startpoint
-        qp.setBrush(Qt.green)
 
 
     def addPoints(self, x,y):
-        updateRED=self.RLED.addPoints(x,y,self.adaptbtn.isChecked(), self.predictbtn.isChecked())
-        updateGREEN=self.GLED.addPoints(x, y, self.adaptbtn.isChecked(), self.predictbtn.isChecked())
-        #print updateRED, updateGREEN
+        t = self.timer.elapsed()
+        self.timer.restart()
+        updateRED=self.RLED.addPoints(x,y, t, self.adaptbtn.isChecked(), self.predictbtn.isChecked())
+        updateGREEN=self.GLED.addPoints(x, y, t, self.adaptbtn.isChecked(), self.predictbtn.isChecked())
+        #adds the measured coordinates
+        udapteobj=self.obj.add_points(updateRED[0],updateGREEN[0], t, self.adaptbtn.isChecked(), self.predictbtn.isChecked())
+
         self.RLED.plotter.add_updated(updateRED[0], updateRED[1], updateRED[2])
         self.GLED.plotter.add_updated(updateRED[0], updateRED[1], updateRED[2])
+        self.obj.plotter.add_updated(udapteobj[0],udapteobj[1],udapteobj[2])
 
 
     def mousePressEvent(self, mouse_event):
         print "start"
-        self.resetFilter()
+        self.RLED.reset()
+        self.GLED.reset()
+        self.obj.reset()
 
         self.timer.start()
         if num_variables==4:
             initial_state=np.array([[mouse_event.x()], [mouse_event.y()], [0.001], [0.001]])
         else:
-            initial_state = np.array([[mouse_event.x()], [mouse_event.y()], [0.00], [0.00], [0.0], [0.0]])
+            initial_state = np.array([[mouse_event.x()], [mouse_event.y()], [0.001], [0.001], [0.00], [0.0]])
         self.RLED.points_measured.append([mouse_event.x(), mouse_event.y()])
         self.GLED.points_measured.append([mouse_event.x(), mouse_event.y()])
 
@@ -368,7 +439,7 @@ class Window(QWidget):
     def mouseMoveEvent(self, mouse_event):
         # print "mouse moved", mouse_event.x(), mouse_event.y()
         if self.predictbtn.isChecked():
-            if self.missing_counter>10:
+            if self.missing_counter>missing_num:
                 self.missing_counter=self.missing_counter-1
                 self.addPoints(mouse_event.x(), mouse_event.y())
             elif self.missing_counter>0:
@@ -397,7 +468,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-mu, sigma = 0, 2 # mean and standard deviation
-datax=np.random.normal(mu, sigma, 1000)
-print datax
