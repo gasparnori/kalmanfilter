@@ -11,8 +11,16 @@ class Filter():
     def init(self,  missing_num, num_variables):
         deltaT=5
         self.active=False
-        self.missing_num=missing_num
-        self.num_variables=num_variables
+
+        self.calibrationCounter=0
+        self.calibNum=10
+        self.Rcalib=np.zeros(shape=(num_variables, self.calibNum)) #saves 100 points in the same location
+
+        #self.calibrationDiff=np.zeros(shape=(num_variables, 100))# saves the last 100 measurements for initialization
+
+        self.missing_num=missing_num #number of missing variables to change
+        self.num_variables=num_variables #number of variables
+
         self.missing_counter=0
         if num_variables == 4:
             # Fk: transition matrix for only position and velocity
@@ -28,10 +36,10 @@ class Filter():
         # Hk:observation matrix
         self.Hk = np.eye(num_variables, num_variables)  # not going to change
         # Pk: transition covariance
-        self.Pk = np.zeros(shape=(num_variables, num_variables))  # np.eye(num_variables, num_variables)
+        self.Pk = np.eye(num_variables, num_variables)*0.1  # np.eye(num_variables, num_variables)
         # Rk: observation covariance
         # self.measurement_covariance = np.eye(4, 4)
-        self.Rk = np.eye(num_variables, num_variables) * 30  # estimate of measurement variance, change to see effect
+        self.Rk = np.eye(num_variables, num_variables) * 10  # estimate of measurement variance, change to see effect
         # Q
         if num_variables == 4:
             self.Qk = np.matrix([[0.3, 0, 0, 0],
@@ -53,11 +61,46 @@ class Filter():
         # a FIFO
         self.updated_state = np.zeros(shape=(num_variables, 100))
 
+    def calibrateR(self, x, y, t):
+        # measurements in a fixed position: should determine the sensor error
+        if self.calibrationCounter<self.calibNum:
+            print "calibrating R...", self.calibNum-self.calibrationCounter
+            if self.calibrationCounter>0:
+                vx = (x - self.Rcalib[0, self.calibrationCounter-1]) / t  # px/usec
+                vy = (y - self.Rcalib[1, self.calibrationCounter-1]) / t  # px/usec
+            else:
+                vx=0
+                vy=0
+            if self.num_variables == 4:
+                self.Rcalib[:, self.calibrationCounter]=[x,y,vx,vy]
+
+            if self.num_variables == 6:
+                if self.calibrationCounter > 1:
+                    ax = (vx - self.Rcalib[2, self.calibrationCounter-1]) / t  # px/usec^2
+                    ay = (vy - self.Rcalib[3, self.calibrationCounter-1]) / t  # px/usec^2
+                else:
+                    ax=0
+                    ay=0
+                self.Rcalib[:, self.calibrationCounter] = [x, y, vx, vy, ax, ay]
+            self.calibrationCounter = self.calibrationCounter + 1
+            return True
+        else:
+            print "now calculate..."
+            self.Rk=np.cov(self.Rcalib[:, 2:])
+            self.calibrationCounter=0
+            print self.Rk
+            return False
+
+
+    def calibrateP(self):
+        print "calibratingQ"
+
     def resetFilter(self):
         self.init(self.missing_num, self.num_variables)
 
     def startFilter(self, initial_state):
         self.resetFilter()
+        self.initCounter=0
         self.active=True
         self.updated_state[:, -1] = initial_state
 
@@ -93,7 +136,7 @@ class Filter():
         else:
             self.measured_state = np.array([[x], [y], [vx], [vy], [ax], [ay]])
 
-    def iterate_filter(self, dt, adaptive=False, fixed=True):
+    def iterate_filter(self, dt, adaptive=False, predicting=True):
         # print dt
         if self.measured_state is None:
             m=None
@@ -117,7 +160,7 @@ class Filter():
         noData = True
         if m is not None and pred is not None:
             #if m[0] is not None:
-            if abs((m-pred)[0,0])<100 and abs((m-pred)[1,0])<100:
+           # if abs((m-pred)[0,0])<100 and abs((m-pred)[1,0])<100:
                 noData=False
 
         if noData is False:
@@ -125,16 +168,16 @@ class Filter():
             innovation = m - self.Hk * pred
             residual = m - (self.Hk * (pred + self.Kgain * innovation))
             if adaptive:
-                self.Rk = forget_R * self.Rk + (1 - forget_R) * (residual * residual.T+ (self.Hk * cov * HkT))
+                self.Rk = self.forget_R * self.Rk + (1 - self.forget_R) * (residual * residual.T)#+ (self.Hk * cov * HkT))
             self.Kgain = cov * HkT * np.linalg.inv(self.Hk * cov * HkT + self.Rk)
             self.Pk = (np.eye(self.num_variables, self.num_variables) - (self.Kgain * self.Hk)) * cov
             if adaptive:
-                self.Qk = forget_Q * self.Qk + (1 - forget_Q) * self.Kgain * innovation * innovation.T * self.Kgain.T
+                self.Qk = self.forget_Q * self.Qk + (1 - self.forget_Q) * self.Kgain * innovation * innovation.T * self.Kgain.T
 
             updateval = pred + self.Kgain * innovation
             #print "Data", updateval.shape
             self.add_updated(updateval)
-            return (m[0:2], updateval[0:2])
+            return (m[0:2].A1, updateval[0:2].A1)
 
         else:
             if self.missing_counter<self.missing_num:
@@ -144,7 +187,7 @@ class Filter():
                 updateval = pred
                #  "noData", updateval.shape
                 self.add_updated(updateval)
-                return ([0,0],  updateval[0:2])
+                return ([0,0],  updateval[0:2].A1)
             #too many values were missing already: need to reset or recalibrate
             else:
                 self.missing_counter=0
