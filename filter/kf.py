@@ -13,8 +13,10 @@ class Filter():
         self.active=False
 
         self.calibrationCounter=0
-        self.calibNum=10
-        self.Rcalib=np.zeros(shape=(num_variables, self.calibNum)) #saves 100 points in the same location
+        self.calibNum=60
+        self.Rcalib=np.zeros(shape=(num_variables, int(self.calibNum/3))) #saves 100 points in the same location
+        self.Pcalib = np.zeros(shape=(num_variables, int(self.calibNum/3)))  # saves 100 points in the same location
+        self.Qcalib = np.zeros(shape=(num_variables, int(self.calibNum/3)))  # saves 100 points in the same location
 
         #self.calibrationDiff=np.zeros(shape=(num_variables, 100))# saves the last 100 measurements for initialization
 
@@ -61,39 +63,52 @@ class Filter():
         # a FIFO
         self.updated_state = np.zeros(shape=(num_variables, 100))
 
-    def calibrateR(self, x, y, t):
-        # measurements in a fixed position: should determine the sensor error
-        if self.calibrationCounter<self.calibNum:
-            print "calibrating R...", self.calibNum-self.calibrationCounter
-            if self.calibrationCounter>0:
-                vx = (x - self.Rcalib[0, self.calibrationCounter-1]) / t  # px/usec
-                vy = (y - self.Rcalib[1, self.calibrationCounter-1]) / t  # px/usec
-            else:
-                vx=0
-                vy=0
-            if self.num_variables == 4:
-                self.Rcalib[:, self.calibrationCounter]=[x,y,vx,vy]
-
-            if self.num_variables == 6:
-                if self.calibrationCounter > 1:
-                    ax = (vx - self.Rcalib[2, self.calibrationCounter-1]) / t  # px/usec^2
-                    ay = (vy - self.Rcalib[3, self.calibrationCounter-1]) / t  # px/usec^2
-                else:
-                    ax=0
-                    ay=0
-                self.Rcalib[:, self.calibrationCounter] = [x, y, vx, vy, ax, ay]
+    def Calibrate(self, x, y, t):
+        if self.calibrationCounter<int(self.calibNum/3):
+            self.Rcalib[:, self.calibrationCounter]=self.calibrateR_P(x,y,t, self.calibrationCounter, self.Rcalib, "R")
             self.calibrationCounter = self.calibrationCounter + 1
-            return True
+
+        elif self.calibrationCounter<int(self.calibNum*2/3):
+            index=self.calibrationCounter-int(self.calibNum/3)
+            self.Pcalib[:, index]=self.calibrateR_P(x,y,t, index, self.Pcalib, "P")
+            self.calibrationCounter = self.calibrationCounter + 1
+
+        elif self.calibrationCounter<self.calibNum:
+            self.calibrateQ(x,y,t,  self.calibrationCounter-int(self.calibNum*2/3))
+            self.calibrationCounter = self.calibrationCounter + 1
         else:
-            print "now calculate..."
-            self.Rk=np.cov(self.Rcalib[:, 2:])
-            self.calibrationCounter=0
+            self.Rk = np.cov(self.Rcalib[:, 2:])
             print self.Rk
-            return False
+            self.Pk= np.cov(self.Pcalib[:, 2:])
+            print self.Pk
+           # self.Qk = np.cov(self.Qcalib[:, 2:])
 
+    def calibrateR_P(self, x, y, t, index, Mlist, type='R'):
+        # measurements in a fixed position: should determine the sensor error
+        if type=="R":
+            print "calibrating R...", index
+        else:
+            print "calibrating P...", index
+        if index>0:
+            vx = (x - Mlist[0, index-1]) / t  # px/usec
+            vy = (y - Mlist[1, index-1]) / t  # px/usec
+        else:
+            vx=0
+            vy=0
+        if self.num_variables == 4:
+            return [x,y,vx,vy]
 
-    def calibrateP(self):
-        print "calibratingQ"
+        if self.num_variables == 6:
+            if index > 1:
+                ax = (vx - Mlist[2, index-1]) / t  # px/usec^2
+                ay = (vy - Mlist[3, index-1]) / t  # px/usec^2
+            else:
+                ax=0
+                ay=0
+            return  [x, y, vx, vy, ax, ay]
+
+    def calibrateQ(self, x, y, t, index):
+        print "calibrating Q", index
 
     def resetFilter(self):
         self.init(self.missing_num, self.num_variables)

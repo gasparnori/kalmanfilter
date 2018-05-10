@@ -53,6 +53,9 @@ class Feature():
                 return (p[0], p[1], t)
             else:
                 return None
+        else:
+            self.kf.Calibrate(datax, datay, t)
+            return ((datax, datay), (datax, datay), t)
 
 class Object():
     def __init__(self, red, green):
@@ -81,7 +84,9 @@ class Object():
                 return (p[0], p[1], t)
             else:
                 return None
-
+        else:
+            self.kf.Calibrate(datax, datay, t)
+            return ((datax,datay), (datax,datay), t)
 
 
 class Window(QWidget):
@@ -89,6 +94,8 @@ class Window(QWidget):
     def __init__(self):
         # every 100 times, 5-10 coordinates are missing
         self.missing_counter=100
+        self.calibCounter=0
+        self.calibNum=60
         self.timer = QElapsedTimer()
         self.initObjects()
         self.initUI()
@@ -111,6 +118,14 @@ class Window(QWidget):
         self.adaptbtn = QCheckBox('Adaptive Filtering', self)
         self.predictbtn = QCheckBox('Predict missing values', self)
         self.randombtn = QCheckBox('Add random noise', self)
+
+        self.redbtn = QCheckBox('Red dots', self)
+        self.greenbtn = QCheckBox('Green dots', self)
+        self.objectbtn = QCheckBox('Combination (yellow)', self)
+        self.redbtn.setChecked(True)
+        self.greenbtn.setChecked(True)
+        self.objectbtn.setChecked(True)
+
         # self.fixedbtn=QRadioButton('Fixed parameters', self)
         self.calibbtn = QPushButton('Calibrate', self)
         self.resetbtn = QPushButton('Reset', self)
@@ -122,9 +137,14 @@ class Window(QWidget):
         self.layout.addWidget(self.predictbtn, 1, 0)
         self.layout.addWidget(self.randombtn, 2, 0)
 
-        self.layout.addWidget(self.calibbtn, 0, 1)
-        self.layout.addWidget(self.resetbtn, 1, 1)
-        self.layout.addWidget(self.plotbtn, 2, 1)
+        self.layout.addWidget(self.redbtn, 0, 1)
+        self.layout.addWidget(self.greenbtn, 1, 1)
+        self.layout.addWidget(self.objectbtn, 2, 1)
+
+        self.layout.addWidget(self.calibbtn, 0, 2)
+        self.layout.addWidget(self.resetbtn, 1, 2)
+        self.layout.addWidget(self.plotbtn, 2, 2)
+
         self.layout.addWidget(self.drawing, 3, 0)
 
         self.layout.setAlignment(Qt.AlignTop)
@@ -134,9 +154,14 @@ class Window(QWidget):
         self.plotbtn.clicked.connect(self.Plotting)
         self.calibbtn.setCheckable(True)
         self.calibbtn.clicked.connect(self.CalibrateCov)
+        self.redbtn.clicked.connect(self.setObjBtn)
+        self.greenbtn.clicked.connect(self.setObjBtn)
 
         self.setWindowTitle('Points')
         self.show()
+
+    def setObjBtn(self, state):
+        self.objectbtn.setChecked(self.redbtn.isChecked()&self.greenbtn.isChecked())
 
     def initObjects(self):
         self.RLED=Feature('red', offset=5.0)
@@ -145,11 +170,15 @@ class Window(QWidget):
 
     def CalibrateCov(self):
         self.calibbtn.setChecked(True)
+        self.calibCounter=0
 
     def Plotting(self):
-        self.RLED.plotter.plot(self.adaptbtn.isChecked(), 'red')
-        self.GLED.plotter.plot(self.adaptbtn.isChecked(), 'green')
-        self.obj.plotter.plot(self.adaptbtn.isChecked(), 'yellow')
+        if self.redbtn.isChecked():
+            self.RLED.plotter.plot(self.adaptbtn.isChecked(), 'red')
+        if self.greenbtn.isChecked():
+            self.GLED.plotter.plot(self.adaptbtn.isChecked(), 'green')
+        if self.objectbtn.isChecked():
+            self.obj.plotter.plot(self.adaptbtn.isChecked(), 'yellow')
 
     def plotMeasured(self, qp, m, u, color):
         if color=='red':
@@ -182,28 +211,38 @@ class Window(QWidget):
     def paintEvent(self, e):
         #print "e", e
         qp = QPainter(self)
+        if self.redbtn.isChecked():
+            self.plotMeasured(qp, self.RLED.points_measured, self.RLED.kf.updated_state, 'red')
+        if self.greenbtn.isChecked():
+            self.plotMeasured(qp, self.GLED.points_measured, self.GLED.kf.updated_state, 'green')
+        if self.objectbtn.isChecked():
+            self.plotMeasured(qp, self.obj.points_measured, self.obj.kf.updated_state, 'yellow')
 
-        self.plotMeasured(qp, self.RLED.points_measured, self.RLED.kf.updated_state, 'red')
-        self.plotMeasured(qp, self.GLED.points_measured, self.GLED.kf.updated_state, 'green')
-        self.plotMeasured(qp, self.obj.points_measured, self.obj.kf.updated_state, 'yellow')
-
-        self.plotUpdated(qp, self.RLED.points_measured, self.RLED.kf.updated_state, 'red')
-        self.plotUpdated(qp, self.GLED.points_measured, self.GLED.kf.updated_state, 'green')
-        self.plotUpdated(qp, self.obj.points_measured, self.obj.kf.updated_state, 'yellow')
+        if self.redbtn.isChecked():
+            self.plotUpdated(qp, self.RLED.points_measured, self.RLED.kf.updated_state, 'red')
+        if self.greenbtn.isChecked():
+            self.plotUpdated(qp, self.GLED.points_measured, self.GLED.kf.updated_state, 'green')
+        if self.objectbtn.isChecked():
+            self.plotUpdated(qp, self.obj.points_measured, self.obj.kf.updated_state, 'yellow')
 
         qp.end()
 
     def addPoints(self, x,y, t):
-        updateRED=self.RLED.addPoints(x,y, t, self.adaptbtn.isChecked(), self.predictbtn.isChecked(), self.randombtn.isChecked(), self.calibbtn.isChecked())
-        updateGREEN=self.GLED.addPoints(x, y, t, self.adaptbtn.isChecked(), self.predictbtn.isChecked(), self.randombtn.isChecked(), self.calibbtn.isChecked())
+        if self.redbtn.isChecked():
+            updateRED=self.RLED.addPoints(x,y, t, self.adaptbtn.isChecked(), self.predictbtn.isChecked(), self.randombtn.isChecked(), self.calibbtn.isChecked())
+            if updateRED is not None:
+                self.RLED.plotter.add_updated(updateRED[0], updateRED[1], updateRED[2])
+
+        if self.greenbtn.isChecked():
+            updateGREEN=self.GLED.addPoints(x, y, t, self.adaptbtn.isChecked(), self.predictbtn.isChecked(), self.randombtn.isChecked(), self.calibbtn.isChecked())
+            if updateGREEN is not None:
+                self.GLED.plotter.add_updated(updateRED[0], updateRED[1], updateRED[2])
+
         #adds the measured coordinates
-        updateobj=self.obj.add_points(updateRED[0],updateGREEN[0], t, self.adaptbtn.isChecked(), self.predictbtn.isChecked(), self.calibbtn.isChecked())
-        if updateRED is not None:
-            self.RLED.plotter.add_updated(updateRED[0], updateRED[1], updateRED[2])
-        if updateGREEN is not None:
-            self.GLED.plotter.add_updated(updateRED[0], updateRED[1], updateRED[2])
-        if updateobj is not None:
-            self.obj.plotter.add_updated(updateobj[0],updateobj[1],updateobj[2])
+        if self.objectbtn.isChecked():
+            updateobj=self.obj.add_points(updateRED[0],updateGREEN[0], t, self.adaptbtn.isChecked(), self.predictbtn.isChecked(), self.calibbtn.isChecked())
+            if updateobj is not None:
+                self.obj.plotter.add_updated(updateobj[0],updateobj[1],updateobj[2])
 
     def mousePressEvent(self, mouse_event):
         t = self.timer.elapsed()
@@ -219,19 +258,22 @@ class Window(QWidget):
                 initial_state=np.array([[mouse_event.x()], [mouse_event.y()], [0.001], [0.001]])
             else:
                 initial_state = np.array([[mouse_event.x()], [mouse_event.y()], [0.001], [0.001], [0.00], [0.0]])
-            self.RLED.points_measured.append([mouse_event.x(), mouse_event.y()])
-            self.GLED.points_measured.append([mouse_event.x(), mouse_event.y()])
-            self.obj.points_measured.append([mouse_event.x(), mouse_event.y()])
 
-           # self.RLED.updated_state[:, -1]=initial_state[:,0]
-            self.RLED.kf.startFilter(initial_state[:,0])
-            self.GLED.kf.startFilter(initial_state[:,0])
-            self.obj.kf.startFilter(initial_state[:,0])
+            if self.redbtn.isChecked():
+                self.RLED.points_measured.append([mouse_event.x(), mouse_event.y()])
+                self.RLED.kf.startFilter(initial_state[:, 0])
+
+            if self.greenbtn.isChecked():
+                self.GLED.points_measured.append([mouse_event.x(), mouse_event.y()])
+                self.GLED.kf.startFilter(initial_state[:, 0])
+
+            if self.objectbtn.isChecked():
+                self.obj.points_measured.append([mouse_event.x(), mouse_event.y()])
+                self.obj.kf.startFilter(initial_state[:,0])
         else:
-            fr = self.RLED.kf.calibrateR(mouse_event.x(), mouse_event.y(), t)
-            fg = self.GLED.kf.calibrateR(mouse_event.x(), mouse_event.y(), t)
-            fo = self.obj.kf.calibrateR(mouse_event.x(), mouse_event.y(), t)
-            self.calibbtn.setChecked(fg and fr and fo)
+            self.addPoints(mouse_event.x(), mouse_event.y(), t)
+            self.calibbtn.setChecked(self.calibCounter<self.calibNum)
+            self.calibCounter=self.calibCounter+1
         self.update()
 
     def mouseMoveEvent(self, mouse_event):
@@ -254,7 +296,7 @@ class Window(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, mouse_event):
-        print "mouse released, tracking stopped"
+        print "mouse released"
 
 
 def main():
