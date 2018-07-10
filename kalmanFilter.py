@@ -8,7 +8,11 @@ from PyQt4.QtGui import *
 import math
 import random
 num_variables=4
-forget= 0.1 #forgetting factor
+forget= 0.001 #forgetting factor
+confidenceInterval=20
+confIntcoeff=60
+max_x=640
+max_y=360
 
 class Plotter():
     def __init__(self):
@@ -59,7 +63,7 @@ class Plotter():
 
 
 class Window(QWidget):
-
+    maxPredictions=100
     def __init__(self):
         # every 100 times, 5-10 coordinates are missing
         self.missing_counter=100
@@ -95,7 +99,7 @@ class Window(QWidget):
         self.points_measured = []
 
         #for the filter
-        self.measured_state = np.zeros(shape=(num_variables, 1))
+        self.measured_state = np.zeros(shape=(2, 1))
        # self.predicted_state = []
         #a FIFO
         self.updated_state = np.zeros(shape=(num_variables, 100))
@@ -111,13 +115,15 @@ class Window(QWidget):
         #                     (0, 0, 0, 1, 0, deltaT),
         #                     (0, 0, 0, 0, 1,0),
         #                     (0, 0, 0, 0, 0, 1)))
-        #Hk:observation matrix
-        self.Hk =np.eye(num_variables, num_variables) #not going to change
-        #Pk: transition covariance
-        self.Pk=np.zeros(shape=(num_variables, num_variables))#np.eye(num_variables, num_variables)
-        #Rk: observation covariance
-        #self.measurement_covariance = np.eye(4, 4)
-        self.Rk =np.eye(num_variables, num_variables)* 10  # estimate of measurement variance, change to see effect
+
+        # Hk:observation matrix
+        self.Hk = np.eye(2, num_variables)  # not going to change
+        # Pk: transition covariance
+        self.Pk = np.zeros(shape=(num_variables, num_variables))  # np.eye(num_variables, num_variables)
+        # Rk: observation covariance
+        # self.measurement_covariance = np.eye(4, 4)
+
+        self.Rk = np.eye(2, 2) * 10  # estimate of measurement variance, change to see effect
         # Q
         self.Qk = np.matrix([[0.5, 0, 0, 0],#, 0, 0],
                     [0, 0.5, 0, 0],#, 0, 0],
@@ -125,7 +131,7 @@ class Window(QWidget):
                     [0, 0, 0, 0.001]])#, 0, 0],
                    # [0, 0, 0, 0, 0.0001, 0],
                    # [0, 0, 0, 0, 0, 0.0001]])
-        self.Kgain=np.eye(num_variables, num_variables)
+        self.Kgain=np.eye(num_variables, 2)
         self.kf = None
 
         self.onlinefilter_means = []
@@ -185,48 +191,48 @@ class Window(QWidget):
         self.timer.restart()
 
         if x is None:
-            p = self.iterate_filter(t,
+            p = self.iterateRobustFilter(t,
                                     np.asmatrix(self.updated_state[:, -1]).transpose(),
                                     None,
                                     self.adaptbtn.isChecked(),
                                     self.predictbtn.isChecked())
-            self.updated_state[:, :-1]=self.updated_state[:, 1:]
-            self.updated_state[:, -1]=p.A1
-            self.measured_state = self.updated_state[:, -1]
-            self.measured_state.shape = (num_variables, 1)
+            #self.updated_state[:, :-1]=self.updated_state[:, 1:]
+            #self.updated_state[:, -1]=p.A1
+            self.measured_state = self.updated_state[0:2, -1]
+            self.measured_state.shape = (2, 1)
             return
         else:
             if self.measured_state is None:
-                self.measured_state=self.updated_state[:, -1]
-                self.measured_state.shape=(num_variables,1)
+                self.measured_state = self.updated_state[0:2, -1]
+                self.measured_state.shape = (2, 1)
             #print self.measured_state
             datax = int(x + np.random.normal(mu, sigma, 1))
             datay = int(y + np.random.normal(mu, sigma, 1))
 
-            if t>0:
-                vx= (datax-self.measured_state[0,0])/t
-                vy= (datay-self.measured_state[1,0])/t
-                ax= (vx-self.measured_state[2,0])/t
-                ay= (vy-self.measured_state[3,0])/t
-                print "ax, ay calculation:", ax, ay
+            # if t>0:
+            #     vx= (datax-self.measured_state[0,0])/t
+            #     vy= (datay-self.measured_state[1,0])/t
+            #     ax= (vx-self.measured_state[2,0])/t
+            #     ay= (vy-self.measured_state[3,0])/t
+            #     print "ax, ay calculation:", ax, ay
             # else:
             #     vx= (self.measured_state[2,0])
             #     vy= (self.measured_state[3,0])
             #     ax= (self.measured_state[4,0])
             #     ay= (self.measured_state[5,0])
 
-            self.measured_state=np.array([[datax], [datay], [vx], [vy]])#, [ax], [ay]])
+            self.measured_state=np.array([[datax], [datay]])#, [vx], [vy]])#, [ax], [ay]])
            # print self.measured_state
             self.points_measured.append([datax, datay])
-            p=self.iterate_filter(t,
+            p=self.iterateRobustFilter(t,
                               np.asmatrix(self.updated_state[:, -1]).transpose(),
                               np.asmatrix(self.measured_state),
                               self.adaptbtn.isChecked(),
                               self.predictbtn.isChecked())
 
-            self.updated_state[:, :-1] = self.updated_state[:, 1:]
-            self.updated_state[:, -1] = p.A1
-            print self.updated_state[:, -1]
+            #self.updated_state[:, :-1] = self.updated_state[:, 1:]
+            #self.updated_state[:, -1] = p.A1
+            #print self.updated_state[:, -1]
 
 
     def mousePressEvent(self, mouse_event):
@@ -258,6 +264,93 @@ class Window(QWidget):
 
 
         self.update()
+
+    def expWeight(self, x):
+        if abs(x) < confidenceInterval:
+            y = 1
+        else:
+            y = 0.5 * np.exp(1 - (abs(x) / confIntcoeff))
+        return (y)
+
+    def iterateRobustFilter(self,dt, u, m, adaptive=False, guessing_enabled=True):
+       # u = np.asmatrix(self.updated_state[:, -1]).transpose()         #state matrix (4x1) or (6x1)
+        if num_variables == 4:
+            self.Fk = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])         # system dynamics (4x4 or 6x6)
+        else:
+            self.Fk = np.array([[1, 0, dt, 0, 0.5 * dt * dt, 0],
+                                [0, 1, 0, dt, 0, 0.5 * dt * dt],
+                                [0, 0, 1, 0, dt, 0],
+                                [0, 0, 0, 1, 0, dt],
+                                [0, 0, 0, 0, 1, 0],
+                                [0, 0, 0, 0, 0, 1]])
+        # #prediction step
+        pred = self.Fk * u         #A priori state matrix (4x1) or (6x1)
+        cov = self.Fk * self.Pk * self.Fk.transpose() + self.Qk         #A priori covariance matrix
+
+        retVal=None #default return value
+
+        #update step if there was a measurement
+        if m is not None:
+            self.predictionCounter=0
+          #  m = self.add_measurement(dt, coordinates)
+
+            #our addition to the weight
+
+            dx = np.linalg.norm(m-pred[0:2])
+            mWeight = self.expWeight(dx)
+
+            diff = (m - self.Hk * pred)  # difference between prediction and measurement * mWeight
+
+            # setting the matrices
+            S = np.linalg.inv(self.Hk * cov * self.Hk.T + self.Rk)
+            self.Kgain = cov * self.Hk.T * S# *mWeight # Kalman gain
+            self.Pk = (np.eye(num_variables) - (self.Kgain * self.Hk)) * cov  # A posteriori covariance matrix
+
+            # update
+            updateval = pred + self.Kgain * diff
+
+            # print self.calibrating
+            #if self.calibrating:
+            #    self.QCalib.append(self.Kgain * diff * diff.T * self.Kgain.T)
+
+            # #adapting Rk and Qk
+            if adaptive:
+                self.Qk = forget * self.Qk + \
+                          (1 - forget) * self.Kgain * diff * diff.transpose() * self.Kgain.transpose()
+                residual = m - (self.Hk * updateval)
+                self.Rk = forget * self.Rk + (1 - forget) * (
+                            residual * residual.T + (self.Hk * self.Pk * self.Hk.T))
+
+            self.updated_state[:, :-1] = self.updated_state[:, 1:]
+            self.updated_state[:, -1] = updateval.A1
+
+            xval = int(round(updateval[0, 0])) if round(updateval[0, 0]) > 0 and round(
+                updateval[0, 0]) < max_x else None
+            yval = int(round(updateval[1, 0])) if round(updateval[1, 0]) > 0 and round(
+                updateval[1, 0]) < max_y else None
+
+            if xval is not None and yval is not None:
+                # print 'Measured: ', (m[0,0], m[1,0]), 'Predicted: ', (pred[0,0],  pred[1,0]), 'updated: ', (xval, yval)
+                retVal=(xval, yval)
+        else:
+            #if not self.calibrating:
+            if guessing_enabled and self.predictionCounter<self.maxPredictions:
+                #update the list with the prediction
+                self.updated_state[:, :-1] = self.updated_state[:, 1:]
+                self.updated_state[:, -1] = pred.A1
+                self.predictionCounter=self.predictionCounter+1
+
+                xpred=int(round(pred[0,0])) if round(pred[0,0])>0 and round(pred[0,0])<max_x else None
+                ypred=int(round(pred[1,0])) if round(pred[1,0])>0 and round(pred[1,0])<max_y else None
+
+                if xpred is not None and ypred is not None:
+                    #self.log.debug("predicting missing value")
+                   # print 'Missing value nr. ', self.predictionCounter, '. Predicted: ', (pred[0,0],  pred[1,0]), 'updated: ', (xpred, ypred)
+                    retVal=(xpred, ypred)
+        return retVal
+
+
+
 
     #the filter itself
     def iterate_filter(self, dt, u, m, adaptive=False, fixed=True):
